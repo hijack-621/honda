@@ -1,0 +1,735 @@
+<script setup lang="ts">
+
+import { loadFbx } from '~/assets/utils/modelLoadFuncs'
+import { productInfo } from '~/types/interface'
+
+import * as THREE from "three";
+import { OrbitControls } from "~/assets/js/Controls";
+import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader";
+import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader";
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader'
+
+import {
+  CSS2DRenderer,
+  CSS2DObject,
+} from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import { ref, onMounted, getCurrentInstance } from "vue";
+import { ElMessageBox, ElMessage, ElSelect, ElOption, ElProgress } from 'element-plus'
+
+
+interface Lights {
+  name: string,
+  obj: THREE.AmbientLight | THREE.DirectionalLight | THREE.PointLight,
+  position?: Array<number>,
+  Helper?: THREE.PointLightHelper
+}
+
+const props = defineProps({
+  dataFromChild: Object
+})
+watch(props, (newVal) => {
+  console.log(newVal);
+  if (newVal) {
+    // console.dir(labelRenderer.value.domElement)
+    const tags = labelRenderer.value.domElement.childNodes;
+    [...tags].forEach(tag => {
+      tag.innerHTML = tag.innerHTML * 1 + 6
+    })
+  }
+})
+let sphere103: THREE.Object3D<THREE.Event> | THREE.Mesh<THREE.SphereGeometry, THREE.MeshLambertMaterial>, lineGeometry, line, raycaster: THREE.Raycaster, mouse: THREE.Vector2;
+raycaster = new THREE.Raycaster();
+mouse = new THREE.Vector2();
+const { proxy } = getCurrentInstance() as any;
+let scene = new THREE.Scene()
+const num = ref(0);
+const isShow = ref(1);
+const info = ref("model loading...");
+let camera = ref();
+const renderer = ref();
+const wheels = [] as any;
+const tires = [] as any
+const labelRenderer = ref();
+const controls = ref();
+const server = "/api/measurePoint/getBySubModel"
+const realData = ref()
+let infos = ref<productInfo[]>([]);
+infos.value = [
+  { key: "时间", val: "2022/12/12 18:30:34" },
+  { key: "工件号(VIN)", val: "678" },
+  { key: "型号", val: "760B" },
+  { key: "检测组", val: "1组" },
+  { key: "合格率", val: "0.89" },
+  { key: "描述", val: "通过" },
+];
+const options = [
+  {
+    value: '555A',
+    label: '555A',
+  },
+  {
+    value: '888B',
+    label: '888B',
+  },
+
+]
+const value = ref("")
+
+function addGrid() {
+  // var mesh = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshPhongMaterial({ color: 0xffffff, depthWrite: false }));
+  // mesh.rotation.x = - Math.PI / 2;
+  // mesh.receiveShadow = true;
+  // scene.add(mesh);
+
+  //添加地板割线
+  var grid = new THREE.GridHelper(8000, 2000, 0xeeeeee, 0xeeeeee);
+  grid.position.y = -6.5;
+  grid.rotation.y = -Math.PI;
+  grid.material.opacity = 0.2;
+  grid.material.transparent = true;
+  scene.add(grid);
+
+}
+
+const initPrerequsites = () => {
+  const element = document.getElementById("container")!;
+  const Lights: Array<Lights> = [
+    { name: 'AmbientLight', obj: new THREE.AmbientLight(0xcccccc, .35) },
+    { name: 'DirectionalLight_top', obj: new THREE.DirectionalLight(0xcccccc, 0.8), position: [50, 50, 50] },
+    { name: 'DirectionalLight_bottom', obj: new THREE.DirectionalLight(0xcccccc, 0.8), position: [0, -200, 0] },
+    { name: 'DirectionalLight_right1', obj: new THREE.DirectionalLight(0xcccccc, 0.8), position: [0, -5, 20] },
+    { name: 'DirectionalLight_right2', obj: new THREE.DirectionalLight(0xcccccc, 0.8), position: [0, -5, -20] },
+  ];
+  Lights.map(item => {
+    item.obj.name = item.name;
+    item.position && item.obj.position.set([...item.position][0], [...item.position][1], [...item.position][2]);
+    item.Helper = new THREE.PointLightHelper(item.obj as any);
+    scene.add(item.obj);
+  })
+  // scene.add(new THREE.AmbientLight(0x444444));
+  // scene.position.y = 0;
+  // const light = new THREE.PointLight(0xffffff);
+  // light.position.set(50, 50, 0);
+  // //告诉平行光需要开启阴影投射
+  // light.castShadow = true;
+  // scene.add(light);//  添加灯光
+
+  //相机
+  camera.value = new THREE.PerspectiveCamera(
+    46,
+    element.clientWidth / element.clientHeight,
+    0.1,
+    100
+  );
+
+  camera.value.position.set(-11.24, 7.88, 12.53); // 设置相机位置
+  // const helper = new THREE.CameraHelper(camera.value );
+  // scene.add(helper);
+  // const aes = new THREE.AxesHelper(10);
+  // scene.add(aes)
+
+  // camera.value.position.set(40, 35, 0); // 设置相机位置
+  camera.value.lookAt(new THREE.Vector3(0, 0, 0)); // 设置相机方向
+  scene.add(camera.value);
+
+  // renderer 设置
+  // const element = document.getElementById("container")!;
+  renderer.value = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.value.setSize(element.clientWidth, element.clientHeight); // 设置渲染区域尺寸
+  renderer.value.shadowMap.enabled = true; // 显示阴影
+  renderer.value.shadowMap.type = THREE.PCFSoftShadowMap;
+  // renderer.value.setClearColor(0x7D8690); // 设置背景颜色
+  element.appendChild(renderer.value.domElement); // 这里是canvas
+  labelRenderer.value = new CSS2DRenderer();
+  labelRenderer.value.setSize(element.clientWidth, element.clientHeight);
+  labelRenderer.value.domElement.style.position = "absolute";
+  labelRenderer.value.domElement.style.top = "0px";
+  // labelRenderer.value.domElement.style.pointerEvents = 'none'; // 这里设置为none，模型点击获取坐标就可以生效了，但是对于css2dobject的操作就被屏蔽了！！！
+  // console.dir(labelRenderer.value.domElement);
+  element.appendChild(labelRenderer.value.domElement); // 这里domElement是 divlabel的父级
+  // init 控制器
+  controls.value = new OrbitControls(
+    camera.value,
+    labelRenderer.value.domElement
+  );
+  // copy中实例了两个控制对象, 经试验 只绑定labelRenderer_controls 也可以！！！，但是不能只绑定 controls ，这个就将controls 定义为 labelRenderer_controls
+  controls.value.minDistance = 5;
+  controls.value.maxDistance = 100;
+  renderer.value.domElement.removeAttribute('tabindex'); //  去除 点击模型出现白色边框
+  labelRenderer.value.domElement.removeAttribute('tabindex'); //  去除 点击模型出现白色边框
+}
+
+const render = () => {
+  requestAnimationFrame(render);
+  renderer.value.render(scene, camera.value);
+  labelRenderer.value.render(scene, camera.value);
+  controls.value.update();
+  // console.log(scene)
+  const time = -performance.now() / 250;
+  const grid = scene.children.filter(v => {
+    return v.type == "GridHelper"
+  })[0]
+
+  //地板动画
+  //const time = -performance.now() / 250;
+  // const grid = scene.children.filter(v => {
+  //   return v.type == "GridHelper"
+  // })[0]
+  // if (grid) {
+  //   grid.position.x = -time * 0.5;
+  // }
+
+  
+  if (grid) {
+    grid.position.x = -time * 1;
+  }
+  // for (let i = 0; i < wheels.length; i++) {
+  //   console.log(wheels[0]);
+
+  //   wheels[0].rotation.x = time * Math.PI* 1/4;
+  //   tires[0].rotation.x = time * Math.PI * 2;
+  // }
+};
+
+function setScaleToFitSize(obj: THREE.Group) {
+  const boxHelper = new THREE.BoxHelper(obj);
+  boxHelper.geometry.computeBoundingBox();
+  const box = boxHelper.geometry.boundingBox!;
+  const maxDiameter = Math.max(
+    box.max.x - box.min.x,
+    box.max.y - box.min.y,
+    box.max.z - box.min.z
+  );
+
+  const scaleValue = (camera.value.position.z / maxDiameter) * 1.5;
+
+  obj.scale.set(scaleValue, scaleValue, scaleValue);
+}
+function adjustCenter(obj: THREE.Group) {
+  // 将模型的中心点设置到canvas坐标系的中心点，保证模型显示是居中的，object就是操作的目标模型
+  let box = new THREE.Box3().setFromObject(obj); // 获取模型的包围盒
+  let mdlen = box.max.x - box.min.x; // 模型长度
+  let mdwid = box.max.z - box.min.z; // 模型宽度
+  let mdhei = box.max.y - box.min.y; // 模型高度
+  let x1 = box.min.x + mdlen / 2; // 模型中心点坐标X
+  let y1 = box.min.y + mdhei / 2; // 模型中心点坐标Y
+  let z1 = box.min.z + mdwid / 2; // 模型中心点坐标Z
+  obj.position.set(-x1, -y1, -z1); // 将模型进行偏移
+}
+
+const loadLabel = async () => {
+  var radius = 0.15,
+    segemnt = 8,
+    rings = 8;
+
+  var sphereMaterial = new THREE.MeshLambertMaterial({ color: "#ECF0F1" });
+  var material = new THREE.LineBasicMaterial({ color: 0x26a7f2 });
+  realData.value.forEach(async (vv: { positionX: number; positionY: number; positionZ: number; pointId: string; }) => {
+    if (vv.positionX != null || vv.positionY != null || vv.positionZ != null) {
+      const div = document.createElement("div");
+      div.className = "myDiv";
+      div.id = vv.pointId;
+      // div.style.pointerEvents = 'none';
+      //div.style.cssText = 'display:flex !important; flex-dirextion:row !important; justify-content:center;align-items:center'
+      div.innerHTML = `
+                      <div class="tag"><span>X</span><span class="hidden">${vv.positionX.toFixed(1)}</span></div>
+                      <div class="tag"><span>Y</span><span class="hidden">${vv.positionY.toFixed(1)}</span></div>
+                      <div class="tag"><span>Z</span><span class="hidden">${vv.positionZ.toFixed(1)}</span></div>
+                      `;
+
+      // div.addEventListener("click", changeEcharts);
+      const divLabel = new CSS2DObject(div);
+      divLabel.position.set(
+        vv.positionX,
+        vv.positionY,
+        vv.positionZ
+      );
+      const begin = new THREE.Vector3(vv.positionX, vv.positionY, vv.positionZ);
+      let end;
+
+      end = new THREE.Vector3(
+        vv.positionX,
+        vv.positionY,
+        vv.positionZ
+      );
+
+      sphere103 = new THREE.Mesh( // ball
+        new THREE.SphereGeometry(radius, segemnt, rings),
+        sphereMaterial
+      );
+      sphere103.name = "mesPoint";
+      lineGeometry = new THREE.BufferGeometry(); //three.js 125 版本以上就废弃掉  目前支持的是 bufferGeometry
+      lineGeometry.setFromPoints([begin, end]);
+      line = new THREE.Line(lineGeometry, material); // line
+      sphere103.position.set(vv.positionX, vv.positionY, vv.positionZ);
+      line.add(divLabel);
+      scene.add(sphere103);
+      scene.add(line);
+      // console.log(vv)
+    }
+  })
+}
+
+
+const loadSTL = async () => {
+
+  // console.log(container.value)
+  await loadFbx(camera, FBXLoader, 'model/M825_white.fbx', scene, [loadLabel]);
+  //await loadLabel()
+  // const mtlLoader = new MTLLoader();
+  // mtlLoader.load("model/Tesla_Model_3.mtl", function (materials) {
+  //   materials.preload();
+  //   var objLoader = new OBJLoader();
+  //   objLoader.setMaterials(materials);
+  //   objLoader.load("model/Tesla_Model_3.obj", async function (object) {
+  //     setScaleToFitSize(object)
+  //     adjustCenter(object)
+  //     // let size = .1;
+  //     // object.scale.set(size, size, size);
+  //     wheels.push(
+  //       object.getObjectByName("silver_01_pivot"),
+  //       object.getObjectByName("silver_02_pivot"),
+  //       object.getObjectByName("silver_03_pivot"),
+  //       object.getObjectByName("silver_04_pivot")
+  //     );
+  //     tires.push(
+  //       object.getObjectByName("tire_01_pivot"),
+  //       object.getObjectByName("tire_02_pivot"),
+  //       object.getObjectByName("tire_03_pivot"),
+  //       object.getObjectByName("tire_04_pivot")
+  //     )
+  //     object.rotation.x -= Math.PI * .5;
+  //     object.translateZ(-1)
+  //     scene.add(object);
+  //     if (num.value >= 100) {
+  //       info.value = "done!";
+  //       setTimeout(() => {
+  //         isShow.value = 0;
+  //       }, 150);
+  //     }
+  //     await loadLabel()
+  //   }, onProgress);
+
+  // });
+};
+
+const onProgress = (xhr: any) => {
+  num.value = Math.floor((xhr.loaded / xhr.total) * 100);
+};
+
+
+function raycastMeshes(callback: Function, raycaster: THREE.Raycaster) {
+  let intersects = [];
+  // 获取整个场景
+  let theScene = scene || new THREE.Scene();
+  // 获取鼠标点击点的射线
+  let theRaycaster = raycaster || new THREE.Raycaster();
+  // 对场景及其子节点遍历
+  for (let i in theScene.children) {
+    // 如果场景的子节点是Group或者Scene对象
+    if (
+      theScene.children[i] instanceof THREE.Group ||
+      theScene.children[i] instanceof THREE.Scene
+    ) {
+      // 场景子节点及其后代，被射线穿过的模型的数组集合
+      // intersects = theRaycaster.intersectObjects(theScene.children[i].children, true)
+      let rayArr = theRaycaster.intersectObjects(
+        theScene.children[i].children,
+        true
+      );
+      intersects.push(...rayArr);
+    } else if (theScene.children[i] instanceof THREE.Mesh) {
+      // 如果场景的子节点是Mesh网格对象，场景子节点被射线穿过的模型的数组集合
+      // intersects.push(theRaycaster.intersectObject(theScene.children[i]))
+    }
+  }
+  intersects = filtersVisibleFalse(intersects); // 过滤掉不可见的
+  // 被射线穿过的模型的数组集合
+  if (intersects && intersects.length > 0) {
+    return callback(intersects);
+  } else {
+    // this.hiddenDetailDiv()
+    return null;
+  }
+}
+
+function filtersVisibleFalse(arr: any[]) {
+  let arrList = arr;
+  if (arr && arr.length > 0) {
+    arrList = [];
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i].object.visible) {
+        arrList.push(arr[i]);
+      }
+    }
+  }
+  return arrList;
+}
+
+function clickApp(intersects: { object: any; point: any }[]) {
+  // let selectedObjects = null;
+  if (intersects[0].object !== undefined) {
+    console.log(intersects[0].object, "这就是成功点击到的对象了~", intersects[0].point);
+    setPoint(intersects[0].point);
+  }
+}
+function setPoint(points: { x: number; y: number; z: number; }) {
+  //console.log(points);
+  scene.remove(sphere103);
+  const x = Math.round(points.x * 1000) / 1000;
+  const y = Math.round(points.y * 1000) / 1000;
+  const z = Math.round(points.z * 1000) / 1000;
+  // const x = Math.round(points.x * 1000) / 1000 + base.value.x;
+  // const y = Math.round(points.y * 1000) / 1000 + base.value.y;
+  // const z = Math.round(points.z * 1000) / 1000 + base.value.z;
+  const params = {
+    positionX: x,
+    positionY: y,
+    positionZ: z,
+    belongTo: '',
+    pointId: '',
+    productPrototypeModel: '',
+    productPrototypeSubModel: '',
+    name:"",
+  };
+  // console.log(params)
+  var radius = 0.25,
+    segemnt = 8,
+    rings = 8;
+  var sphereMaterial = new THREE.MeshLambertMaterial({ color: 0x9afc00 });
+  sphere103 = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, segemnt, rings),
+    sphereMaterial
+  );
+  sphere103.position.set(x, y, z);
+  scene.add(sphere103);
+  setTimeout(() => {
+    ElMessageBox.confirm(
+      `当前选中的测量点坐标为：（${x}, ${y}, ${z})<br/>
+      <div class="inputBox flex flex-row justify-between items-center">
+        <label>请输入测量点编号:</label><input style="margin-left:24px; border:1px solid #000;" id="inputName" autocomplete="off" />
+      </div>
+      <div class="inputBox flex flex-row justify-between items-center mt-5">
+        <label>请输入位置:</label><input style="margin-left:24px; border:1px solid #000;" id="inputZone" autocomplete="off" />
+      </div>
+      <br/>
+       <div class="inputBox flex flex-row justify-between items-center">
+        <label>请输入模型名称:</label><input style="margin-left:36px; border:1px solid #000;" id="inputModelName" autocomplete="off" />
+      </div>
+      `,
+      `测量点添加`,
+      {
+        confirmButtonText: "添加",
+        cancelButtonText: "再确认看看",
+        dangerouslyUseHTMLString: true,
+        type: "warning",
+        draggable: true,
+      }
+    )
+      .then(() => {
+        params.pointId = (document.querySelector("#inputName") as any).value;
+        params.belongTo = (document.querySelector("#inputZone") as any).value;
+        params.productPrototypeModel = (document.querySelector("#inputModelName") as any).value;
+        params.productPrototypeSubModel = (document.querySelector("#inputModelName") as any)!.value;
+        const server = "/api/measurePoint/addPoint";
+        //const local = "/index/rsdemo/addPoints"; // 
+        proxy.$http.post(server, params).then((res: any) => {
+          if (res) {
+            const msg = ElMessage({
+              type: "success",
+              message: "添加成功！",
+            });
+            setTimeout(() => {
+              msg.close();
+              // router.replace({ name: "measure" });
+            }, 800);
+          }
+        })
+      })
+      .catch(() => {
+        ElMessage({
+          type: "info",
+          message: "取消添加！",
+        });
+        scene.remove(sphere103); // 如果取消就移除小球
+      });
+  }, 800);
+}
+
+const bindEvents = () => {
+  renderer.value.domElement.addEventListener("click", (event: { preventDefault: () => void; clientX: number; clientY: number; }) => {
+    event.preventDefault();
+    let div3D = renderer.value.domElement;
+    let div3DLeft = renderer.value.domElement.getBoundingClientRect().left;
+    let div3DTop = renderer.value.domElement.getBoundingClientRect().top;
+    // console.log(div3DLeft, div3DTop)
+    mouse.x = ((event.clientX - div3DLeft) / div3D.clientWidth) * 2 - 1;
+    mouse.y = -((event.clientY - div3DTop) / div3D.clientHeight) * 2 + 1;
+    // 通过鼠标点的位置和当前相机的矩阵计算出raycaster
+    // console.log(mouse.x, mouse)
+    raycaster.setFromCamera(mouse, camera.value);
+    raycastMeshes(clickApp, raycaster);
+  });
+};
+
+const deco = () => {
+  const decorations = document.querySelectorAll('.decoration') as NodeListOf<HTMLElement>;
+  [...decorations].forEach((v, i) => {
+    if (i > 0) {
+      v.style.right = `-${16 + 14 * i}%`
+    }
+    i > 2 ? v.style.opacity = `${1 * (1 - i * 0.1)}` : ''
+  })
+}
+
+const init = async () => {
+  initPrerequsites()
+  render(); // 渲染
+  await loadSTL(); // 加载STL模型
+  addGrid()
+  bindEvents();
+  deco()
+};
+
+function barClicked(p) {
+  // initMP(p);
+}
+
+defineExpose({barClicked})
+
+onMounted(async () => {
+  value.value = options[0].value;
+  const res0 = await proxy.$http.get(server, {
+    
+    params: {
+      subModel: "M825"
+    },
+    headers:{
+      token:'55d4fb77-2181-443f-bde8-f2b92c1c0379'
+    }
+  });
+  if (res0.status == 200) {
+    realData.value = res0.data; // 模型上测量点位置
+  } else {
+    alert("测量点位置获取错误，请检查!");
+    return;
+  }
+  init();
+});
+</script>
+<template>
+  <div>
+    <div class="main w-full h-full relative" ref="container" id="container">
+      <!-- isshow here -->
+      <div class="progress" v-show="false">
+        <el-progress :text-inside="true" :stroke-width="24" :percentage="num" status="success" />
+        <div class="progressInfo">{{ info }}</div>
+      </div>
+      <div class="model3d-title absolute top-3 left-3">
+        <span class="ml-4 font-black italic  text-white text-sm">白车身3D测量点位一览</span>
+        <div class="productInfo  flex flex-col justify-around  mt-3">
+          <div class="productInfoItem relative flex flex-row justify-around  items-center w-full"
+            v-for="(v, i) in infos" :key="i">
+            <div class="pKey w-1/3 text-slate-400 text-xs">{{ v.key }}</div>
+            <div class="pValue mr-auto flex-1 text-sm">{{ v.val }}</div>
+          </div>
+        </div>
+        <!-- <div class="decoration" v-for="(v, i) in 9" :key="i"></div> -->
+      </div>
+      <div class="model3d-modelSel absolute top-6 right-14">
+        <span class="text-white mr-2">当前车型:</span>
+        <el-select v-model="value" class="m-2 w-[33%] z-[9999] " placeholder="Select" size="small">
+          <el-option class="text-amber-600" v-for="item in options" :key="item.value" :label="item.label"
+            :value="item.value">
+          </el-option>
+        </el-select>
+      </div>
+    </div>
+  </div>
+</template>
+<style lang="less" scoped>
+.progress {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  width: 350px;
+  transform: translateX(-50%);
+  z-index: 9999;
+
+  .progressInfo {
+    color: #fff; // color:#1f3b6f
+    text-align: center;
+    margin-top: 5px;
+  }
+}
+
+.el-select {
+  & :deep(.el-input__wrapper) {
+    background-color: rgba(0, 0, 0, 0) !important;
+    box-shadow: none !important;
+    border: none !important;
+
+    &:focus {
+      border: none !important;
+    }
+
+    &:focus-visible {
+      border: none !important;
+      outline: none !important;
+    }
+
+    &>input {
+      color: #fbb70d !important;
+      font-weight: bolder !important;
+      border: none !important;
+    }
+  }
+}
+
+
+.model3d-title {
+  .productInfo {
+    width: 240px;
+    height: 423px;
+    background-image: url(../assets/images/u809.png);
+
+    .productInfoItem {
+      border-bottom: none !important;
+
+      .pKey {}
+
+      .pValue {
+        font-family: "Arial Normal", Arial, sans-serif;
+      }
+
+      // :not(&:last-of-type) 
+      &:not(&:last-of-type)::before {
+        content: '';
+        position: absolute;
+        left: 18px;
+        top: auto;
+        bottom: -24px;
+        right: 18px;
+        height: 1px;
+        width: calc(100%- 36px);
+        background-color: #052E61;
+      }
+
+      &::after {
+        content: '';
+        position: absolute;
+
+      }
+    }
+  }
+
+  text-align: center;
+  padding: 13px 23px;
+  color: white;
+  perspective: 800px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 21px;
+    left: 15px;
+    width: 8px;
+    height: 8px;
+    background: rgba(242, 242, 242, 1);
+    // border: 1px solid #52c8f6;
+    // transform: skew(-45deg);
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    width: 8px;
+    height: 8px;
+    background: rgba(242, 242, 242, .6);
+  }
+
+  .decoration {
+    content: '';
+    width: 16px;
+    height: 13px;
+    position: absolute;
+    top: 50%;
+    background: rgba(103, 133, 143, 1);
+    transform: translateY(-50%) skew(-45deg);
+    right: -16%;
+  }
+}
+
+:deep(.el-message-box__message) {
+  p {
+    line-height: 26px !important;
+  }
+
+  .inputBox {
+    display: flex !important;
+    justify-content: space-between !important;
+
+    input {
+      box-shadow: rgb(220, 223, 230) 0px 0px 0;
+      outline: none;
+      border: 1px solid #39393a;
+      border-radius: 3px;
+    }
+  }
+}
+
+.el-message-box__message {
+  p {
+    line-height: 26px !important;
+  }
+
+  .inputBox {
+    display: flex !important;
+    justify-content: space-between !important;
+
+    input {
+      box-shadow: rgb(220, 223, 230) 0px 0px 0;
+      outline: none;
+      border: 1px solid #39393a;
+      border-radius: 3px;
+    }
+  }
+}
+
+.el-button--primary {
+  color: #111 !important;
+}
+
+.tag {
+  background: rgba(38, 20, 16, .99);
+  border: 1px solid #f84306;
+  color: #ffffff;
+  width: 25px;
+  height: 25px;
+  font-size: 14px;
+  line-height: 25px;
+  text-align: center;
+  border-radius: 3px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.myDiv {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+
+  &:hover {
+    &>.tag>span {
+      display: inline-block !important;
+    }
+  }
+}
+</style>
